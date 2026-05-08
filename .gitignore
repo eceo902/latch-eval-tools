@@ -7,3 +7,5 @@ __pycache__
 .eval_cache
 output
 eval_workspace
+
+.surveillancebench/
