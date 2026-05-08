@@ -16,7 +16,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 # System dependencies (includes libs needed by R packages and Python native extensions)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates gnupg git \
-    ripgrep vim sudo nodejs npm \
+    ripgrep vim sudo \
     procps psmisc wget jq busybox hdf5-tools \
     build-essential gfortran pkg-config \
     libcurl4-openssl-dev libssl-dev libxml2-dev \
@@ -24,6 +24,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libfreetype6-dev libpng-dev libtiff5-dev libjpeg-dev \
     libhdf5-dev libgeos-dev libproj-dev libgdal-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# Node.js 20 (required by @google/gemini-cli; fine for @openai/codex which needs >=16)
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
+    rm -rf /var/lib/apt/lists/*
 
 # uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
@@ -33,6 +38,9 @@ ENV IS_SANDBOX=1
 # OpenAI Codex CLI
 RUN npm config set prefix /root/.local && \
     npm install -g @openai/codex@0.125.0
+
+# Gemini CLI
+RUN npm install -g @google/gemini-cli@0.41.2
 
 # Claude Code
 RUN curl -fsSL https://claude.ai/install.sh | bash

@@ -64,7 +64,10 @@ Built-in harness helpers:
 - `run_minisweagent_task`
 - `run_claudecode_task` (requires `ANTHROPIC_API_KEY` and `claude` CLI)
 - `run_openaicodex_task` (requires `OPENAI_API_KEY` or `CODEX_API_KEY` and `codex` CLI)
+- `run_geminicli_task` (requires `GEMINI_API_KEY` or `GOOGLE_API_KEY` and `gemini` CLI)
 - `run_plotsagent_task` (experimental latch-plots harness)
+
+For Gemini CLI runs, make sure the selected Docker image contains `gemini`. While testing local agent-environment changes, build `agent_env` as `benchmark_agent:local` and pass `docker_image="benchmark_agent:local"`.
 
 ### Linter
 

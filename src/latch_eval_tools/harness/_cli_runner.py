@@ -23,16 +23,19 @@ from latch_eval_tools.harness.utils import (
 EVAL_TIMEOUT = 600
 ANTHROPIC_ENV_KEYS = {"ANTHROPIC_API_KEY"}
 OPENAI_ENV_KEYS = {"OPENAI_API_KEY", "CODEX_API_KEY"}
+GEMINI_ENV_KEYS = {"GEMINI_API_KEY", "GOOGLE_API_KEY"}
 
 OOM_EXIT_CODE = 137
 MAX_OOM_RESTARTS = 10
 AGENT_STATE_DIRS = {
     "claudecode": ".claude",
     "openaicodex": ".codex",
+    "geminicli": ".gemini",
 }
 AGENT_IDENTIFIER_KEYS = {
     "claudecode": "session_id",
     "openaicodex": "thread_id",
+    "geminicli": "session_id",
 }
 
 
@@ -90,6 +93,20 @@ def _build_agent_command(
                 'model_reasoning_effort="xhigh"',
             ]
         )
+    elif agent_type == "geminicli":
+        agent_cmd = list(cli_command)
+        if resume_identifier is not None:
+            agent_cmd.extend(["--resume", resume_identifier])
+        agent_cmd.extend(
+            [
+                "--prompt",
+                "",
+                "--skip-trust",
+                "--approval-mode=yolo",
+                "--output-format",
+                "stream-json",
+            ]
+        )
     else:
         raise ValueError(f"Unknown agent type: {agent_type}")
 
@@ -98,7 +115,10 @@ def _build_agent_command(
         agent_cmd.extend(["--model", mapped_model])
     elif model_name:
         agent_cmd.extend(["--model", model_name])
-    if resume_identifier is not None: # codex exec resume --help: Usage: codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]
+    # codex exec resume takes the session id as a trailing positional:
+    #   codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]
+    # Gemini takes it via --resume <id> only, so skip the trailing append.
+    if resume_identifier is not None and agent_type != "geminicli":
         agent_cmd.append(resume_identifier)
     return agent_cmd
 
@@ -198,6 +218,8 @@ def _run_cli_agent(
         ENV_KEYS = ANTHROPIC_ENV_KEYS
     elif agent_type == "openaicodex":
         ENV_KEYS = OPENAI_ENV_KEYS
+    elif agent_type == "geminicli":
+        ENV_KEYS = GEMINI_ENV_KEYS
     else:
         raise ValueError(f"Unknown agent type: {agent_type}")
     for key in ENV_KEYS:
@@ -537,6 +559,21 @@ def _extract_metadata(
             metadata["n_turns"] = n_turns
         if total_usage["input_tokens"] > 0 or total_usage["output_tokens"] > 0:
             metadata["usage"] = total_usage
+    elif agent_type == "geminicli":
+        session_id = None
+        gemini_result = None
+        for event in trajectory:
+            event_type = event.get("type", "")
+            if event_type == "init" and session_id is None:
+                session_id = event.get("session_id")
+            elif event_type == "result":
+                gemini_result = event
+        if session_id:
+            metadata["session_id"] = session_id
+        if gemini_result:
+            stats = gemini_result.get("stats")
+            if stats:
+                metadata["stats"] = stats
 
     metadata["timed_out"] = timed_out
     metadata["eval_timeout_seconds"] = eval_timeout
@@ -546,4 +583,3 @@ def _extract_metadata(
         metadata["error_details"] = error_details
 
     return metadata
-
