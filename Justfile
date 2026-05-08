@@ -20,4 +20,7 @@ build-image:
 push-image:
   docker push {{IMAGE}}:{{TAG}}
 
-publish-image: build-image push-image
+verify-image:
+  docker run --rm --platform linux/amd64 {{IMAGE}}:{{TAG}} gemini --version
+
+publish-image: build-image verify-image push-image

@@ -34,17 +34,18 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 ENV IS_SANDBOX=1
+ENV PATH="/root/.local/bin:$PATH"
 
 # OpenAI Codex CLI
 RUN npm config set prefix /root/.local && \
     npm install -g @openai/codex@0.125.0
 
 # Gemini CLI
-RUN npm install -g @google/gemini-cli@0.41.2
+RUN npm install -g @google/gemini-cli@0.41.2 && \
+    gemini --version
 
 # Claude Code
 RUN curl -fsSL https://claude.ai/install.sh | bash
-ENV PATH="/root/.local/bin:$PATH"
 RUN claude install 2.1.119
 
 # R (from CRAN for a recent release on Bookworm)
@@ -58,7 +59,7 @@ RUN curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x95C0FAF3
 
     
 # Python environment — agent-env deps
-# Build context: latch-eval-tools/env/  (docker build -f Dockerfile .)
+# Build context: latch-eval-tools/agent_env/
 COPY . /root/
 
 WORKDIR /root
