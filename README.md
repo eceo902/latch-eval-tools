@@ -65,9 +65,10 @@ Built-in harness helpers:
 - `run_claudecode_task` (requires `ANTHROPIC_API_KEY` and `claude` CLI)
 - `run_openaicodex_task` (requires `OPENAI_API_KEY` or `CODEX_API_KEY` and `codex` CLI)
 - `run_geminicli_task` (requires `GEMINI_API_KEY` or `GOOGLE_API_KEY` and `gemini` CLI)
+- `run_grokcli_task` (requires `GROK_API_KEY` or `XAI_API_KEY` and `grok` CLI from `grok-dev` npm package)
 - `run_plotsagent_task` (experimental latch-plots harness)
 
-The default Docker image includes the Gemini CLI. While testing local agent-environment changes, build `agent_env` as `benchmark_agent:local` with `--platform linux/amd64` and pass `docker_image="benchmark_agent:local"`.
+The default Docker image includes the Gemini and Grok CLIs. While testing local agent-environment changes, build `agent_env` as `benchmark_agent:local` with `--platform linux/amd64` and pass `docker_image="benchmark_agent:local"`.
 
 ### Linter
 

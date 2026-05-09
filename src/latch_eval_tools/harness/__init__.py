@@ -15,6 +15,7 @@ from latch_eval_tools.harness.claudecode import run_claudecode_task
 from latch_eval_tools.harness.plotsagent import run_plotsagent_task
 from latch_eval_tools.harness.openaicodex import run_openaicodex_task
 from latch_eval_tools.harness.geminicli import run_geminicli_task
+from latch_eval_tools.harness.grokcli import run_grokcli_task
 
 __all__ = [
     "EvalRunner",
@@ -32,4 +33,5 @@ __all__ = [
     "run_plotsagent_task",
     "run_openaicodex_task",
     "run_geminicli_task",
+    "run_grokcli_task",
 ]

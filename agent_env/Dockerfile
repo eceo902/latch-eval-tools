@@ -44,6 +44,13 @@ RUN npm config set prefix /root/.local && \
 RUN npm install -g @google/gemini-cli@0.41.2 && \
     gemini --version
 
+# Bun (required by grok-dev — its `grok` binary uses /usr/bin/env bun)
+RUN npm install -g bun@1.3.13
+
+# Grok CLI (xAI, third-party `grok-dev` package — installs `grok` binary)
+RUN npm install -g grok-dev@1.1.6 && \
+    grok --version
+
 # Claude Code
 RUN curl -fsSL https://claude.ai/install.sh | bash
 RUN claude install 2.1.119

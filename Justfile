@@ -22,5 +22,6 @@ push-image:
 
 verify-image:
   docker run --rm --platform linux/amd64 {{IMAGE}}:{{TAG}} gemini --version
+  docker run --rm --platform linux/amd64 {{IMAGE}}:{{TAG}} grok --version
 
 publish-image: build-image verify-image push-image
