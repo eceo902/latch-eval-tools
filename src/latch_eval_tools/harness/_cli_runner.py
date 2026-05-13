@@ -565,17 +565,38 @@ def _extract_metadata(
     elif agent_type == "pi":
         session_id = None
         n_turns = 0
+        total_cost = 0
+        total_usage = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+        }
 
         for event in trajectory:
             if event.get("type") == "session":
                 session_id = event.get("id")
             elif event.get("type") == "turn_end":
                 n_turns += 1
+            elif event.get("type") == "message_end":
+                message = event.get("message")
+                if not isinstance(message, dict) or message.get("role") != "assistant":
+                    continue
+                usage = message["usage"]
+                total_usage["input_tokens"] += usage["input"]
+                total_usage["output_tokens"] += usage["output"]
+                total_usage["cache_read_tokens"] += usage["cacheRead"]
+                total_usage["cache_write_tokens"] += usage["cacheWrite"]
+                total_cost += usage["cost"]["total"]
 
         if session_id:
             metadata["session_id"] = session_id
         if n_turns > 0:
             metadata["n_turns"] = n_turns
+        if any(total_usage.values()):
+            metadata["usage"] = total_usage
+        if total_cost > 0:
+            metadata["total_cost"] = total_cost
 
     metadata["timed_out"] = timed_out
     metadata["eval_timeout_seconds"] = eval_timeout
@@ -585,4 +606,3 @@ def _extract_metadata(
         metadata["error_details"] = error_details
 
     return metadata
-
