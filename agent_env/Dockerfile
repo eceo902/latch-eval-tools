@@ -16,7 +16,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 # System dependencies (includes libs needed by R packages and Python native extensions)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates gnupg git \
-    ripgrep vim sudo nodejs npm \
+    ripgrep vim sudo \
     procps psmisc wget jq busybox hdf5-tools \
     build-essential gfortran pkg-config \
     libcurl4-openssl-dev libssl-dev libxml2-dev \
@@ -30,9 +30,13 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 ENV IS_SANDBOX=1
 
-# OpenAI Codex CLI
-RUN npm config set prefix /root/.local && \
-    npm install -g @openai/codex@0.125.0
+# Node and Codex/Pi CLIs
+COPY --from=node:22-bookworm-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:22-bookworm-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
+    ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx && \
+    npm config set prefix /root/.local && \
+    npm install -g @openai/codex@0.125.0 @earendil-works/pi-coding-agent@0.74.0
 
 # Claude Code
 RUN curl -fsSL https://claude.ai/install.sh | bash

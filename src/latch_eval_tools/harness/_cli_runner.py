@@ -23,16 +23,24 @@ from latch_eval_tools.harness.utils import (
 EVAL_TIMEOUT = 600
 ANTHROPIC_ENV_KEYS = {"ANTHROPIC_API_KEY"}
 OPENAI_ENV_KEYS = {"OPENAI_API_KEY", "CODEX_API_KEY"}
+PI_ENV_KEYS = {
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+    "XAI_API_KEY",
+}
 
 OOM_EXIT_CODE = 137
 MAX_OOM_RESTARTS = 10
 AGENT_STATE_DIRS = {
     "claudecode": ".claude",
     "openaicodex": ".codex",
+    "pi": ".pi",
 }
 AGENT_IDENTIFIER_KEYS = {
     "claudecode": "session_id",
     "openaicodex": "thread_id",
+    "pi": "id",
 }
 
 
@@ -90,6 +98,12 @@ def _build_agent_command(
                 'model_reasoning_effort="xhigh"',
             ]
         )
+    elif agent_type == "pi":
+        agent_cmd = list(cli_command)
+        agent_cmd.extend(["--mode", "json", "--print"])
+        if resume_identifier is not None:
+            agent_cmd.extend(["--session", resume_identifier])
+        agent_cmd.extend(["--thinking", "xhigh"])
     else:
         raise ValueError(f"Unknown agent type: {agent_type}")
 
@@ -98,7 +112,7 @@ def _build_agent_command(
         agent_cmd.extend(["--model", mapped_model])
     elif model_name:
         agent_cmd.extend(["--model", model_name])
-    if resume_identifier is not None: # codex exec resume --help: Usage: codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]
+    if agent_type != "pi" and resume_identifier is not None:
         agent_cmd.append(resume_identifier)
     return agent_cmd
 
@@ -198,12 +212,23 @@ def _run_cli_agent(
         ENV_KEYS = ANTHROPIC_ENV_KEYS
     elif agent_type == "openaicodex":
         ENV_KEYS = OPENAI_ENV_KEYS
+    elif agent_type == "pi":
+        ENV_KEYS = PI_ENV_KEYS
     else:
         raise ValueError(f"Unknown agent type: {agent_type}")
     for key in ENV_KEYS:
         value = env.get(key)
         if value:
             env_flags.extend(["-e", f"{key}={value}"])
+    if agent_type == "pi":
+        env_flags.extend(
+            [
+                "-e",
+                "PI_SKIP_VERSION_CHECK=1",
+                "-e",
+                "PI_TELEMETRY=0",
+            ]
+        )
     if memory_limit_bytes is None:
         memory_limit_bytes = get_memory_limit_bytes()
     container_name = f"eval-{agent_type}-{uuid.uuid4().hex[:8]}"
@@ -537,6 +562,41 @@ def _extract_metadata(
             metadata["n_turns"] = n_turns
         if total_usage["input_tokens"] > 0 or total_usage["output_tokens"] > 0:
             metadata["usage"] = total_usage
+    elif agent_type == "pi":
+        session_id = None
+        n_turns = 0
+        total_cost = 0
+        total_usage = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+        }
+
+        for event in trajectory:
+            if event.get("type") == "session":
+                session_id = event.get("id")
+            elif event.get("type") == "turn_end":
+                n_turns += 1
+            elif event.get("type") == "message_end":
+                message = event.get("message")
+                if not isinstance(message, dict) or message.get("role") != "assistant":
+                    continue
+                usage = message["usage"]
+                total_usage["input_tokens"] += usage["input"]
+                total_usage["output_tokens"] += usage["output"]
+                total_usage["cache_read_tokens"] += usage["cacheRead"]
+                total_usage["cache_write_tokens"] += usage["cacheWrite"]
+                total_cost += usage["cost"]["total"]
+
+        if session_id:
+            metadata["session_id"] = session_id
+        if n_turns > 0:
+            metadata["n_turns"] = n_turns
+        if any(total_usage.values()):
+            metadata["usage"] = total_usage
+        if total_cost > 0:
+            metadata["total_cost"] = total_cost
 
     metadata["timed_out"] = timed_out
     metadata["eval_timeout_seconds"] = eval_timeout
