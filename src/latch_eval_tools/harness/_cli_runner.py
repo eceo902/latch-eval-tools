@@ -273,6 +273,10 @@ def _run_cli_agent(
                 remaining_timeout = deadline - time.time()
                 if remaining_timeout <= 0:
                     timed_out = True
+                    log_file.write(
+                        f"\n\nAgent timed out after {eval_timeout} seconds\n"
+                    )
+                    log_file.flush()
                     break
 
                 agent_cmd = _build_agent_command(
@@ -360,6 +364,10 @@ def _run_cli_agent(
                     timed_out_attempt = True
                     process.kill()
                     process.wait()
+                    log_file.write(
+                        f"\n\nAgent timed out after {eval_timeout} seconds\n"
+                    )
+                    log_file.flush()
 
                 stdout_thread.join(timeout=5)
                 stderr_thread.join(timeout=5)
