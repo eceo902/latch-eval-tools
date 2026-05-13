@@ -42,6 +42,7 @@ AGENT_IDENTIFIER_KEYS = {
     "openaicodex": "thread_id",
     "pi": "id",
 }
+PI_STREAMING_EVENT_TYPES = {"message_update", "tool_execution_update"}
 
 
 def teardown_container(container_name: str) -> None:
@@ -314,6 +315,11 @@ def _run_cli_agent(
                                 continue
                             try:
                                 event = json.loads(stripped)
+                                if (
+                                    agent_type == "pi"
+                                    and event["type"] in PI_STREAMING_EVENT_TYPES
+                                ):
+                                    continue
                                 with trajectory_lock:
                                     trajectory.append(event)
                                 persist_trajectory()
@@ -606,4 +612,3 @@ def _extract_metadata(
         metadata["error_details"] = error_details
 
     return metadata
-
