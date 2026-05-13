@@ -5,7 +5,7 @@ from latch_eval_tools.harness.utils import DEFAULT_DOCKER_IMAGE
 
 
 def _map_model_name(model_name: str | None) -> str | None:
-    # Pi uses google/..., existing eval harnesses use gemini/...
+    # Pi uses google/..., existing eval harness calls use gemini/...
     if model_name is not None and model_name.startswith("gemini/"):
         return f"google/{model_name.removeprefix('gemini/')}"
     return model_name

@@ -606,3 +606,4 @@ def _extract_metadata(
         metadata["error_details"] = error_details
 
     return metadata
+
