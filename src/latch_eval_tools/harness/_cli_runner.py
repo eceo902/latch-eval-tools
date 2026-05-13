@@ -1,4 +1,3 @@
-from collections import deque
 from datetime import datetime
 import json
 import os
@@ -44,7 +43,6 @@ AGENT_IDENTIFIER_KEYS = {
     "pi": "id",
 }
 PI_STREAMING_EVENT_TYPES = {"message_update", "tool_execution_update"}
-PI_STREAMING_EVENT_TAIL_LINES = 50
 
 
 def teardown_container(container_name: str) -> None:
@@ -245,13 +243,8 @@ def _run_cli_agent(
     trajectory_file.write_text(json.dumps(trajectory, indent=2))
     oom_detected = False
     oom_restarts = 0
-    pi_streaming_event_counts = {
-        event_type: 0 for event_type in PI_STREAMING_EVENT_TYPES
-    }
-    pi_streaming_event_tail: deque[str] = deque(maxlen=PI_STREAMING_EVENT_TAIL_LINES)
 
     trajectory_lock = threading.Lock()
-    pi_streaming_lock = threading.Lock()
 
     def persist_trajectory():
         with trajectory_lock:
@@ -280,10 +273,6 @@ def _run_cli_agent(
                 remaining_timeout = deadline - time.time()
                 if remaining_timeout <= 0:
                     timed_out = True
-                    log_file.write(
-                        f"\n\nAgent timed out after {eval_timeout} seconds\n"
-                    )
-                    log_file.flush()
                     break
 
                 agent_cmd = _build_agent_command(
@@ -326,9 +315,6 @@ def _run_cli_agent(
                                     agent_type == "pi"
                                     and event["type"] in PI_STREAMING_EVENT_TYPES
                                 ):
-                                    with pi_streaming_lock:
-                                        pi_streaming_event_counts[event["type"]] += 1
-                                        pi_streaming_event_tail.append(stripped)
                                     continue
                                 with trajectory_lock:
                                     trajectory.append(event)
@@ -378,25 +364,7 @@ def _run_cli_agent(
                 stdout_thread.join(timeout=5)
                 stderr_thread.join(timeout=5)
                 last_return_code = process.returncode
-                if agent_type == "pi" and any(pi_streaming_event_counts.values()):
-                    with pi_streaming_lock:
-                        log_file.write("\n\nFiltered Pi streaming events:\n")
-                        for event_type in sorted(PI_STREAMING_EVENT_TYPES):
-                            log_file.write(
-                                f"{event_type}: {pi_streaming_event_counts[event_type]}\n"
-                            )
-                        if pi_streaming_event_tail:
-                            log_file.write(
-                                f"\nLast {len(pi_streaming_event_tail)} filtered Pi streaming events:\n"
-                            )
-                            for event_line in pi_streaming_event_tail:
-                                log_file.write(f"{event_line}\n")
-                    log_file.flush()
                 if timed_out_attempt:
-                    log_file.write(
-                        f"\n\nAgent timed out after {eval_timeout} seconds\n"
-                    )
-                    log_file.flush()
                     timed_out = True
                     break
 
