@@ -307,11 +307,12 @@ def _run_cli_agent(
                         return
                     try:
                         for line in process.stdout:
+                            if agent_type != "pi":
+                                log_file.write(line)
+                                log_file.flush()
+
                             stripped = line.strip()
                             if not stripped:
-                                if agent_type != "pi":
-                                    log_file.write(line)
-                                    log_file.flush()
                                 continue
                             try:
                                 event = json.loads(stripped)
@@ -323,12 +324,7 @@ def _run_cli_agent(
                                 with trajectory_lock:
                                     trajectory.append(event)
                                 persist_trajectory()
-                                if agent_type != "pi":
-                                    log_file.write(line)
-                                    log_file.flush()
                             except json.JSONDecodeError:
-                                log_file.write(line)
-                                log_file.flush()
                                 print(f"Warning: Failed to parse JSON: {stripped}")
                     except ValueError:
                         pass
