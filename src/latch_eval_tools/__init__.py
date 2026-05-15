@@ -25,6 +25,7 @@ from latch_eval_tools.graders import (
     DistributionComparisonGrader,
     SpatialAdjacencyGrader,
     MultipleChoiceGrader,
+    RefusalVocabGrader,
     GRADER_REGISTRY,
     get_grader,
 )
@@ -63,6 +64,7 @@ __all__ = [
     "DistributionComparisonGrader",
     "SpatialAdjacencyGrader",
     "MultipleChoiceGrader",
+    "RefusalVocabGrader",
     "GRADER_REGISTRY",
     "get_grader",
 ]

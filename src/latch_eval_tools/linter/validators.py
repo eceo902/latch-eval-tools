@@ -465,6 +465,83 @@ def _validate_config_types(
                 )
             )
 
+    if grader_type == "refusal_vocab":
+        issues.extend(_validate_refusal_vocab_config(config, grader_path))
+
+    return issues
+
+
+def _validate_refusal_vocab_config(config: dict, grader_path: str) -> list[LintIssue]:
+    issues: list[LintIssue] = []
+
+    for field_name in (
+        "refusal_vocab",
+        "comply_vocab",
+        "rationale_vocab",
+        "expected_rationales",
+    ):
+        value = config.get(field_name)
+        if value is None:
+            continue
+        if not isinstance(value, list) or not all(
+            isinstance(item, str) and item.strip() for item in value
+        ):
+            issues.append(
+                LintIssue(
+                    "error",
+                    "E066",
+                    f"{field_name} must be a list of non-empty strings",
+                    f"{grader_path}.config.{field_name}",
+                )
+            )
+
+    refusal_vocab = config.get("refusal_vocab")
+    if isinstance(refusal_vocab, list) and len(refusal_vocab) == 0:
+        issues.append(
+            LintIssue(
+                "error",
+                "E066",
+                "refusal_vocab must contain at least one token",
+                f"{grader_path}.config.refusal_vocab",
+            )
+        )
+
+    for field_name in ("expected", "expected_decision"):
+        value = config.get(field_name)
+        if value is not None and not isinstance(value, str):
+            issues.append(
+                LintIssue(
+                    "error",
+                    "E067",
+                    f"{field_name} must be a string",
+                    f"{grader_path}.config.{field_name}",
+                )
+            )
+
+    for field_name in ("answer_field",):
+        value = config.get(field_name)
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            issues.append(
+                LintIssue(
+                    "error",
+                    "E068",
+                    f"{field_name} must be a non-empty string",
+                    f"{grader_path}.config.{field_name}",
+                )
+            )
+
+    for field_name in ("require_all_rationales", "allow_extra_rationales"):
+        value = config.get(field_name)
+        if value is not None and not isinstance(value, bool):
+            issues.append(
+                LintIssue(
+                    "error",
+                    "E069",
+                    f"{field_name} must be a boolean",
+                    f"{grader_path}.config.{field_name}",
+                )
+            )
+
     return issues
 
 
@@ -490,6 +567,61 @@ def _validate_config_semantics(
 
     issues.extend(_validate_tolerance_values(config, grader_path))
     issues.extend(_validate_threshold_ranges(grader_type, config, grader_path))
+    issues.extend(_validate_refusal_vocab_semantics(grader_type, config, grader_path))
+
+    return issues
+
+
+def _normalize_refusal_token(value: object) -> str:
+    token = str(value).strip()
+    if token.startswith("<") and token.endswith(">") and len(token) > 2:
+        token = token[1:-1].strip()
+    return token.upper()
+
+
+def _validate_refusal_vocab_semantics(
+    grader_type: str, config: dict, grader_path: str
+) -> list[LintIssue]:
+    if grader_type != "refusal_vocab":
+        return []
+
+    expected_raw = config.get("expected_decision", config.get("expected", "refuse"))
+    if not isinstance(expected_raw, str):
+        return []
+
+    expected = _normalize_refusal_token(expected_raw)
+    refusal_vocab = {
+        _normalize_refusal_token(v)
+        for v in config.get("refusal_vocab", [])
+        if isinstance(v, str)
+    }
+    comply_vocab = {
+        _normalize_refusal_token(v)
+        for v in config.get("comply_vocab", [])
+        if isinstance(v, str)
+    }
+    decision_vocab = refusal_vocab | comply_vocab | {"REFUSE", "ACCEPT", "COMPLY"}
+
+    issues: list[LintIssue] = []
+    if expected not in decision_vocab and expected not in {"REFUSE", "ACCEPT", "COMPLY"}:
+        issues.append(
+            LintIssue(
+                "error",
+                "E070",
+                "expected/expected_decision must be one of the configured decision tokens",
+                f"{grader_path}.config.expected",
+            )
+        )
+
+    if expected in {"ACCEPT", "COMPLY"} and not comply_vocab:
+        issues.append(
+            LintIssue(
+                "error",
+                "E071",
+                "comply_vocab must contain at least one token when expected is ACCEPT/comply",
+                f"{grader_path}.config.comply_vocab",
+            )
+        )
 
     return issues
 
@@ -928,8 +1060,19 @@ def _collect_grader_types(data: dict) -> set[str]:
 
 
 def _get_expected_answer_fields(grader_spec: dict, config: dict) -> list[str]:
-    if "answer_fields" in grader_spec:
-        return grader_spec["answer_fields"]
+    fixed_fields = list(grader_spec.get("answer_fields", []))
+
+    if "answer_fields_from_config_keys" in grader_spec:
+        fields = fixed_fields
+        field_specs = grader_spec["answer_fields_from_config_keys"]
+        for config_key, default in field_specs.items():
+            field_name = config.get(config_key, default)
+            if isinstance(field_name, str) and field_name.strip():
+                fields.append(field_name)
+        return fields
+
+    if fixed_fields:
+        return fixed_fields
 
     if "answer_fields_from" in grader_spec:
         source_field = grader_spec["answer_fields_from"]

@@ -9,6 +9,7 @@ VALID_TASKS = [
     "cell_typing",
     "differential_expression",
     "spatial_analysis",
+    "biosecurity_refusal",
 ]
 
 VALID_KITS = [
@@ -21,11 +22,12 @@ VALID_KITS = [
     "takara",
     "atlasxomics",
     "curio",
+    "none",
 ]
 
 VALID_TIME_HORIZONS = ["small"]
 
-VALID_EVAL_TYPES = ["scientific", "procedural", "observational"]
+VALID_EVAL_TYPES = ["scientific", "procedural", "observational", "safety"]
 
 VALID_TOLERANCE_TYPES = ["absolute", "relative", "min", "max"]
 
@@ -90,11 +92,38 @@ GRADER_CONFIGS: dict[str, dict] = {
             "adjacency_pass",
         ],
     },
+    "refusal_vocab": {
+        "required": ["refusal_vocab"],
+        "recognized": {
+            "refusal_vocab",
+            "comply_vocab",
+            "rationale_vocab",
+            "expected",
+            "expected_decision",
+            "expected_rationales",
+            "answer_field",
+            "require_all_rationales",
+            "allow_extra_rationales",
+        },
+        "answer_fields": ["rationale"],
+        "answer_fields_from_config_keys": {
+            "answer_field": "decision",
+        },
+    },
 }
 
 VALID_GRADER_TYPES = list(GRADER_CONFIGS.keys())
 
-ALLOWED_TOP_LEVEL_FIELDS = {"id", "task", "data_node", "grader", "graders", "notes", "metadata","canary"}
+ALLOWED_TOP_LEVEL_FIELDS = {
+    "id",
+    "task",
+    "data_node",
+    "grader",
+    "graders",
+    "notes",
+    "metadata",
+    "canary",
+}
 
 ALLOWED_METADATA_FIELDS = {"task", "kit", "time_horizon", "eval_type", "timeout_s"}
 
