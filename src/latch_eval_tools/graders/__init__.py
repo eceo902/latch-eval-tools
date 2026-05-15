@@ -5,6 +5,8 @@ from .label_set import LabelSetJaccardGrader
 from .distribution import DistributionComparisonGrader
 from .spatial import SpatialAdjacencyGrader
 from .multiple_choice import MultipleChoiceGrader
+from .predicate import PredicateLeafGrader
+from .composite import AllOfGrader, ListMatchGrader, DictMatchGrader
 from .helpers import grade_multiple_graders_single_answer  # noqa: E402 -- depends on GRADER_REGISTRY
 
 GRADER_REGISTRY = {
@@ -17,6 +19,10 @@ GRADER_REGISTRY = {
     "marker_gene_separation": MarkerGeneSeparationGrader,
     "spatial_adjacency": SpatialAdjacencyGrader,
     "multiple_choice": MultipleChoiceGrader,
+    "predicate_leaf": PredicateLeafGrader,
+    "all_of": AllOfGrader,
+    "list_match": ListMatchGrader,
+    "dict_match": DictMatchGrader,
 }
 
 
@@ -40,6 +46,10 @@ __all__ = [
     "DistributionComparisonGrader",
     "SpatialAdjacencyGrader",
     "MultipleChoiceGrader",
+    "PredicateLeafGrader",
+    "AllOfGrader",
+    "ListMatchGrader",
+    "DictMatchGrader",
     "GRADER_REGISTRY",
     "get_grader",
     "grade_multiple_graders_single_answer",

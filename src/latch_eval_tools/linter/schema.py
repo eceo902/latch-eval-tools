@@ -23,7 +23,7 @@ VALID_KITS = [
     "curio",
 ]
 
-VALID_TIME_HORIZONS = ["small"]
+VALID_TIME_HORIZONS = ["small", "long"]
 
 VALID_EVAL_TYPES = ["scientific", "procedural", "observational"]
 
@@ -58,7 +58,12 @@ GRADER_CONFIGS: dict[str, dict] = {
     },
     "marker_gene_precision_recall": {
         "required": ["canonical_markers", "scoring", "answer_field"],
-        "recognized": {"canonical_markers", "ground_truth_labels", "scoring", "answer_field"},
+        "recognized": {
+            "canonical_markers",
+            "ground_truth_labels",
+            "scoring",
+            "answer_field",
+        },
         "answer_field_from_config": "answer_field",
         "answer_field_default": "top_marker_genes",
     },
@@ -90,13 +95,79 @@ GRADER_CONFIGS: dict[str, dict] = {
             "adjacency_pass",
         ],
     },
+    "all_of": {
+        "required": ["children"],
+        "recognized": {
+            "children",
+            "pass_rule",
+            "min_passing_children",
+            "score_threshold",
+            "metadata",
+        },
+        "answer_fields_collect": "recursive",
+    },
+    "list_match": {
+        "required": ["answer_field", "k", "match_key", "ground_truth"],
+        "recognized": {
+            "answer_field",
+            "k",
+            "match_key",
+            "match_key_normalize",
+            "deduplicate_by",
+            "ground_truth",
+            "per_tuple_rule",
+            "tuple_pass_min",
+            "additive_score_min",
+            "metadata",
+        },
+        "answer_field_from_config": "answer_field",
+    },
+    "dict_match": {
+        "required": ["answer_field", "ground_truth"],
+        "recognized": {
+            "answer_field",
+            "ground_truth",
+            "per_entry_rule",
+            "all_keys_required",
+            "metadata",
+        },
+        "answer_field_from_config": "answer_field",
+    },
+    "predicate_leaf": {
+        "required": ["predicate", "role"],
+        "recognized": {
+            "predicate",
+            "role",
+            "answer_field",
+            "name",
+            "threshold",
+            "metadata",
+        },
+        "answer_field_from_config": "answer_field",
+    },
 }
 
 VALID_GRADER_TYPES = list(GRADER_CONFIGS.keys())
 
-ALLOWED_TOP_LEVEL_FIELDS = {"id", "task", "data_node", "grader", "graders", "notes", "metadata","canary"}
+ALLOWED_TOP_LEVEL_FIELDS = {
+    "id",
+    "task",
+    "data_node",
+    "grader",
+    "graders",
+    "notes",
+    "metadata",
+    "canary",
+}
 
-ALLOWED_METADATA_FIELDS = {"task", "kit", "time_horizon", "eval_type", "timeout_s"}
+ALLOWED_METADATA_FIELDS = {
+    "task",
+    "kit",
+    "time_horizon",
+    "eval_type",
+    "timeout_s",
+    "modules",
+}
 
 ALLOWED_GRADER_FIELDS = {"type", "config"}
 
