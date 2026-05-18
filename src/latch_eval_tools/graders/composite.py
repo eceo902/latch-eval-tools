@@ -4,7 +4,7 @@ predicate-leaves and nested composites."""
 from typing import Any
 
 from .base import BinaryGrader, GraderResult
-from .predicate import SCALAR_OPS, evaluate_predicate, resolve_jsonpath
+from .predicate import SCALAR_OPS, _apply_role, evaluate_predicate, resolve_jsonpath
 
 # shared helper functions vv
 
@@ -57,85 +57,19 @@ def _evaluate_leaf(leaf: dict, value: Any) -> tuple[str, bool, float, str, dict]
     try:
         raw = evaluate_predicate(predicate, value)
     except (ValueError, KeyError, TypeError) as exc:
-        return (
-            kind,
-            False,
-            0.0,
-            label,
-            {
-                "error": str(exc),
-                "role": role,
-                "op": op,
-            },
-        )
+        return kind, False, 0.0, label, {"error": str(exc), "role": role, "op": op}
 
-    if role == "hard_fail":
-        triggered = float(raw) >= threshold if is_scalar else bool(raw)
-        score = float(raw) if is_scalar else (0.0 if triggered else 1.0)
-        return (
-            "hard_fail",
-            not triggered,
-            score,
-            label,
-            {
-                "op": op,
-                "role": role,
-                "raw": raw,
-                "is_scalar": is_scalar,
-            },
-        )
-    if role == "additive":
-        if is_scalar:
-            return (
-                "scoring",
-                True,
-                float(raw),
-                label,
-                {
-                    "op": op,
-                    "role": role,
-                    "raw": raw,
-                    "is_scalar": True,
-                },
-            )
-        passed = bool(raw)
-        return (
-            "scoring",
-            passed,
-            (1.0 if passed else 0.0),
-            label,
-            {
-                "op": op,
-                "role": role,
-                "raw": raw,
-                "is_scalar": False,
-            },
-        )
-    if is_scalar:
-        score = float(raw)
-        return (
-            "scoring",
-            score >= threshold,
-            score,
-            label,
-            {
-                "op": op,
-                "role": role,
-                "raw": raw,
-                "is_scalar": True,
-            },
-        )
-    passed = bool(raw)
+    kind, passed, score = _apply_role(role, raw, is_scalar, threshold)
     return (
-        "scoring",
+        kind,
         passed,
-        (1.0 if passed else 0.0),
+        score,
         label,
         {
             "op": op,
             "role": role,
             "raw": raw,
-            "is_scalar": False,
+            "is_scalar": is_scalar,
         },
     )
 

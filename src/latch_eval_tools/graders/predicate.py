@@ -148,6 +148,33 @@ def evaluate_predicate(pred: Any, value: Any) -> bool | float:
     raise ValueError(f"unknown predicate op: {op!r}")
 
 
+def _apply_role(
+    role: Any, raw: Any, is_scalar: bool, threshold: float
+) -> tuple[str, bool, float]:
+    """Map (role, predicate verdict) -> (kind, passed, score).
+
+    kind: 'scoring' (gate / additive) or 'hard_fail'. Unknown role falls
+    through to ('scoring', False, 0.0) -- the linter catches it at lint
+    time; this is belt-and-braces.
+    """
+    if role == "hard_fail":
+        triggered = float(raw) >= threshold if is_scalar else bool(raw)
+        score = float(raw) if is_scalar else (0.0 if triggered else 1.0)
+        return "hard_fail", not triggered, score
+    if role == "additive":
+        if is_scalar:
+            return "scoring", True, float(raw)
+        passed = bool(raw)
+        return "scoring", passed, 1.0 if passed else 0.0
+    if role == "gate":
+        if is_scalar:
+            score = float(raw)
+            return "scoring", score >= threshold, score
+        passed = bool(raw)
+        return "scoring", passed, 1.0 if passed else 0.0
+    return "scoring", False, 0.0
+
+
 class PredicateLeafGrader(BinaryGrader):
     """
     Grader for bare predicate-leaf at the root of an eval
@@ -187,34 +214,20 @@ class PredicateLeafGrader(BinaryGrader):
         op = predicate.get("op") if isinstance(predicate, dict) else None
         is_scalar = op in SCALAR_OPS
 
-        if role == "gate":
-            if is_scalar:
-                passed = float(raw_result) >= threshold
-                score = float(raw_result)
-            else:
-                passed = bool(raw_result)
-                score = 1.0 if passed else 0.0
-        elif role == "hard_fail":
-            if is_scalar:
-                triggered = float(raw_result) >= threshold
-                score = float(raw_result)
-            else:
-                triggered = bool(raw_result)
-                score = 0.0 if triggered else 1.0
-            passed = not triggered
-        elif role == "additive":
+        if role == "additive":
             return _fail_grade(
                 agent_answer,
                 "role 'additive' is invalid at root; valid only inside "
                 "list_match or dict_match GT entries",
                 name=name,
             )
-        else:
+        if role not in ("gate", "hard_fail"):
             return _fail_grade(
                 agent_answer,
                 f"unknown role {role!r}; expected one of gate, hard_fail",
                 name=name,
             )
+        _, passed, score = _apply_role(role, raw_result, is_scalar, threshold)
 
         return GraderResult(
             passed=passed,

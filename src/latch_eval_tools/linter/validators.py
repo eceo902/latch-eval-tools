@@ -2,7 +2,7 @@ import re
 
 from pydantic import ValidationError
 
-from ..graders.predicate import BOOLEAN_OPS, KNOWN_OPS, resolve_jsonpath
+from ..graders.predicate import BOOLEAN_OPS, resolve_jsonpath
 from ..types import EvalGraderSelection
 from .schema import (
     ALLOWED_GRADER_FIELDS,
@@ -637,22 +637,46 @@ def _validate_config_edge_cases(
     return issues
 
 
-_PREDICATE_OP_RECOGNIZED: dict[str, set[str]] = {
-    "equals": {"op", "arg"},
-    "in": {"op", "args"},
-    "unordered_set_eq": {"op", "expected"},
-    "and": {"op", "args"},
-    "or": {"op", "args"},
-    "not": {"op", "arg"},
-    "any": {"op", "path", "body"},
-    "every": {"op", "path", "body"},
-    "none": {"op", "path", "body"},
-    "field": {"op", "name", "body"},
-    "jaccard_ge": {"op", "possible_sets", "threshold"},
-    "f1": {"op", "expected"},
-    "jaccard": {"op", "possible_sets"},
-    "weighted_label": {"op", "table", "default"},
+# Per-op spec used by _validate_predicate. Each entry declares:
+#   required:     keys that must be present (drives E072)
+#   optional:     keys allowed but not required (joins `required` for the
+#                 recognized-set used by W042)
+#   list_args:    keys whose value must be a list   (drives E073)
+#   string_args:  keys whose value must be a string (drives E073)
+#   number_args:  keys whose value must be a number, not bool (drives E073)
+#   dict_args:    keys whose value must be a dict   (drives E073)
+#   path_args:    keys whose value is a JSONPath string (drives E075)
+#   recurse:      single key holding a sub-predicate to recurse into
+#   recurse_list: single key holding a list of sub-predicates to recurse into
+_PREDICATE_OP_SPEC: dict[str, dict] = {
+    "equals": {"required": ["arg"]},
+    "in": {"required": ["args"], "list_args": ["args"]},
+    "unordered_set_eq": {"required": ["expected"], "list_args": ["expected"]},
+    "and": {"required": ["args"], "list_args": ["args"], "recurse_list": "args"},
+    "or": {"required": ["args"], "list_args": ["args"], "recurse_list": "args"},
+    "not": {"required": ["arg"], "recurse": "arg"},
+    "any": {"required": ["path", "body"], "path_args": ["path"], "recurse": "body"},
+    "every": {"required": ["path", "body"], "path_args": ["path"], "recurse": "body"},
+    "none": {"required": ["path", "body"], "path_args": ["path"], "recurse": "body"},
+    "field": {"required": ["name", "body"], "string_args": ["name"], "recurse": "body"},
+    "jaccard_ge": {
+        "required": ["possible_sets", "threshold"],
+        "list_args": ["possible_sets"],
+        "number_args": ["threshold"],
+    },
+    "f1": {"required": ["expected"], "list_args": ["expected"]},
+    "jaccard": {"required": ["possible_sets"], "list_args": ["possible_sets"]},
+    "weighted_label": {
+        "required": ["table"],
+        "dict_args": ["table"],
+        "optional": ["default"],
+    },
 }
+
+
+def _recognized_keys(spec: dict) -> set[str]:
+    return {"op"} | set(spec.get("required", [])) | set(spec.get("optional", []))
+
 
 _PREDICATE_MAX_DEPTH = 8
 _COMPOSITE_MAX_DEPTH = 8
@@ -1095,28 +1119,23 @@ def _validate_predicate(pred, location: str, depth: int = 0) -> list[LintIssue]:
             )
         ]
     if "op" not in pred:
-        return [
-            LintIssue(
-                "error",
-                "E070",
-                "predicate must have an 'op' key",
-                location,
-            )
-        ]
+        return [LintIssue("error", "E070", "predicate must have an 'op' key", location)]
     op = pred["op"]
-    if op not in KNOWN_OPS:
+    if op not in _PREDICATE_OP_SPEC:
         return [
             LintIssue(
                 "error",
                 "E071",
-                f"Unknown predicate op: {op!r}. Known ops: {sorted(KNOWN_OPS)}",
+                f"Unknown predicate op: {op!r}. Known ops: {sorted(_PREDICATE_OP_SPEC)}",
                 location,
             )
         ]
 
+    spec = _PREDICATE_OP_SPEC[op]
     issues: list[LintIssue] = []
 
-    recognized = _PREDICATE_OP_RECOGNIZED.get(op, {"op"})
+    # W042: unrecognized keys (typo + disallowed-metadata catcher)
+    recognized = _recognized_keys(spec)
     for key in pred:
         if key not in recognized:
             issues.append(
@@ -1128,88 +1147,43 @@ def _validate_predicate(pred, location: str, depth: int = 0) -> list[LintIssue]:
                 )
             )
 
-    if op == "equals":
-        if "arg" not in pred:
-            issues.append(_missing_pred_arg(op, "arg", location))
-    elif op == "in":
-        issues.extend(_require_list_arg(pred, op, "args", location))
-    elif op == "unordered_set_eq":
-        issues.extend(_require_list_arg(pred, op, "expected", location))
-    elif op in {"and", "or"}:
-        sub_issues = _require_list_arg(pred, op, "args", location)
-        issues.extend(sub_issues)
-        if not sub_issues:
-            for i, sub in enumerate(pred["args"]):
-                issues.extend(
-                    _validate_predicate(sub, f"{location}.args[{i}]", depth + 1)
-                )
-    elif op == "not":
-        if "arg" not in pred:
-            issues.append(_missing_pred_arg(op, "arg", location))
-        else:
+    # E072: required keys present
+    for key in spec.get("required", []):
+        if key not in pred:
+            issues.append(_missing_pred_arg(op, key, location))
+
+    # E073: per-arg type checks (only fire when key is present)
+    for key in spec.get("list_args", []):
+        if key in pred and not isinstance(pred[key], list):
+            issues.append(_wrong_type_issue(op, key, "list", pred[key], location))
+    for key in spec.get("string_args", []):
+        if key in pred and not isinstance(pred[key], str):
+            issues.append(_wrong_type_issue(op, key, "string", pred[key], location))
+    for key in spec.get("number_args", []):
+        if key in pred and (
+            isinstance(pred[key], bool) or not isinstance(pred[key], (int, float))
+        ):
+            issues.append(_wrong_type_issue(op, key, "number", pred[key], location))
+    for key in spec.get("dict_args", []):
+        if key in pred and not isinstance(pred[key], dict):
+            issues.append(_wrong_type_issue(op, key, "object", pred[key], location))
+
+    # E075: jsonpath syntax
+    for key in spec.get("path_args", []):
+        if key in pred:
+            issues.extend(_validate_jsonpath(pred[key], f"{location}.{key}"))
+
+    # Recurse into sub-predicates
+    rec_key = spec.get("recurse")
+    if rec_key and rec_key in pred:
+        issues.extend(
+            _validate_predicate(pred[rec_key], f"{location}.{rec_key}", depth + 1)
+        )
+    rec_list_key = spec.get("recurse_list")
+    if rec_list_key and isinstance(pred.get(rec_list_key), list):
+        for i, sub in enumerate(pred[rec_list_key]):
             issues.extend(
-                _validate_predicate(pred["arg"], f"{location}.arg", depth + 1)
-            )
-    elif op in {"any", "every", "none"}:
-        if "path" not in pred:
-            issues.append(_missing_pred_arg(op, "path", location))
-        else:
-            issues.extend(_validate_jsonpath(pred["path"], f"{location}.path"))
-        if "body" not in pred:
-            issues.append(_missing_pred_arg(op, "body", location))
-        else:
-            issues.extend(
-                _validate_predicate(pred["body"], f"{location}.body", depth + 1)
-            )
-    elif op == "field":
-        name = pred.get("name")
-        if name is None:
-            issues.append(_missing_pred_arg(op, "name", location))
-        elif not isinstance(name, str):
-            issues.append(
-                LintIssue(
-                    "error",
-                    "E073",
-                    f"Predicate op 'field' arg 'name' must be string, got {type(name).__name__}",
-                    f"{location}.name",
-                )
-            )
-        if "body" not in pred:
-            issues.append(_missing_pred_arg(op, "body", location))
-        else:
-            issues.extend(
-                _validate_predicate(pred["body"], f"{location}.body", depth + 1)
-            )
-    elif op == "jaccard_ge":
-        issues.extend(_require_list_arg(pred, op, "possible_sets", location))
-        threshold = pred.get("threshold")
-        if threshold is None:
-            issues.append(_missing_pred_arg(op, "threshold", location))
-        elif isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
-            issues.append(
-                LintIssue(
-                    "error",
-                    "E073",
-                    f"Predicate op 'jaccard_ge' arg 'threshold' must be number, got {type(threshold).__name__}",
-                    f"{location}.threshold",
-                )
-            )
-    elif op == "f1":
-        issues.extend(_require_list_arg(pred, op, "expected", location))
-    elif op == "jaccard":
-        issues.extend(_require_list_arg(pred, op, "possible_sets", location))
-    elif op == "weighted_label":
-        table = pred.get("table")
-        if table is None:
-            issues.append(_missing_pred_arg(op, "table", location))
-        elif not isinstance(table, dict):
-            issues.append(
-                LintIssue(
-                    "error",
-                    "E073",
-                    f"Predicate op 'weighted_label' arg 'table' must be object, got {type(table).__name__}",
-                    f"{location}.table",
-                )
+                _validate_predicate(sub, f"{location}.{rec_list_key}[{i}]", depth + 1)
             )
 
     return issues
@@ -1224,19 +1198,15 @@ def _missing_pred_arg(op: str, key: str, location: str) -> LintIssue:
     )
 
 
-def _require_list_arg(pred: dict, op: str, key: str, location: str) -> list[LintIssue]:
-    if key not in pred:
-        return [_missing_pred_arg(op, key, location)]
-    if not isinstance(pred[key], list):
-        return [
-            LintIssue(
-                "error",
-                "E073",
-                f"Predicate op {op!r} arg {key!r} must be list, got {type(pred[key]).__name__}",
-                f"{location}.{key}",
-            )
-        ]
-    return []
+def _wrong_type_issue(
+    op: str, key: str, expected: str, value, location: str
+) -> LintIssue:
+    return LintIssue(
+        "error",
+        "E073",
+        f"Predicate op {op!r} arg {key!r} must be {expected}, got {type(value).__name__}",
+        f"{location}.{key}",
+    )
 
 
 def _validate_jsonpath(path, location: str) -> list[LintIssue]:
