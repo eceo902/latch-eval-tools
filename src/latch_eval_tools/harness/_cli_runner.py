@@ -241,6 +241,7 @@ def _run_cli_agent(
     trajectory = []
     trajectory_file = work_dir / "trajectory.json"
     trajectory_file.write_text(json.dumps(trajectory, indent=2))
+    eval_answer_file = agent_dir / "eval_answer.json"
     oom_detected = False
     oom_restarts = 0
 
@@ -354,21 +355,52 @@ def _run_cli_agent(
                     process.stdin.close()
 
                 timed_out_attempt = False
+                submission_attempt = False
                 try:
-                    process.wait(timeout=remaining_timeout)
+                    if agent_type != "pi":
+                        process.wait(timeout=remaining_timeout)
+                    else:
+                        while process.poll() is None:
+                            now = time.time()
+                            remaining_timeout = deadline - now
+                            if remaining_timeout <= 0:
+                                raise subprocess.TimeoutExpired(
+                                    process.args, remaining_timeout
+                                )
+
+                            try:
+                                if eval_answer_file.exists():
+                                    json.loads(eval_answer_file.read_text())
+                                    submission_attempt = True
+                                    process.terminate()
+                                    try:
+                                        process.wait(timeout=10)
+                                    except subprocess.TimeoutExpired:
+                                        process.kill()
+                                        process.wait()
+                                    break
+                            except (json.JSONDecodeError, OSError):
+                                pass
+
+                            time.sleep(min(1, remaining_timeout))
                 except subprocess.TimeoutExpired:
                     timed_out_attempt = True
                     process.kill()
                     process.wait()
-                    log_file.write(
-                        f"\n\nAgent timed out after {eval_timeout} seconds\n"
-                    )
-                    log_file.flush()
 
                 stdout_thread.join(timeout=5)
                 stderr_thread.join(timeout=5)
                 last_return_code = process.returncode
+                if submission_attempt:
+                    # todo: change
+                    log_file.write("\n\nDetected Pi eval_answer.json; stopping agent\n")
+                    log_file.flush()
+                    break
                 if timed_out_attempt:
+                    log_file.write(
+                        f"\n\nAgent timed out after {eval_timeout} seconds\n"
+                    )
+                    log_file.flush()
                     timed_out = True
                     break
 
