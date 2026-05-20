@@ -2,20 +2,21 @@ import re
 
 from pydantic import ValidationError
 
+from ..graders.predicate import BOOLEAN_OPS, resolve_jsonpath
 from ..types import EvalGraderSelection
 from .schema import (
-    VALID_TASKS,
-    VALID_KITS,
-    VALID_TIME_HORIZONS,
+    ALLOWED_GRADER_FIELDS,
+    ALLOWED_METADATA_FIELDS,
+    ALLOWED_TOP_LEVEL_FIELDS,
+    DATA_NODE_PATTERN,
+    GRADER_CONFIGS,
+    MULTIPLE_CHOICE_PLACEHOLDER,
     VALID_EVAL_TYPES,
     VALID_GRADER_TYPES,
+    VALID_KITS,
+    VALID_TASKS,
+    VALID_TIME_HORIZONS,
     VALID_TOLERANCE_TYPES,
-    GRADER_CONFIGS,
-    DATA_NODE_PATTERN,
-    ALLOWED_TOP_LEVEL_FIELDS,
-    ALLOWED_METADATA_FIELDS,
-    ALLOWED_GRADER_FIELDS,
-    MULTIPLE_CHOICE_PLACEHOLDER,
     LintIssue,
 )
 
@@ -384,6 +385,7 @@ def _validate_single_grader(grader, grader_path: str) -> list[LintIssue]:
     issues.extend(_validate_config_types(grader_type, config, grader_path))
     issues.extend(_validate_config_semantics(grader_type, config, grader_path))
     issues.extend(_validate_config_edge_cases(grader_type, config, grader_path))
+    issues.extend(_validate_taxonomy_grader_config(grader_type, config, grader_path))
 
     return issues
 
@@ -633,6 +635,603 @@ def _validate_config_edge_cases(
                         )
 
     return issues
+
+
+# Per-op spec used by _validate_predicate. Each entry declares:
+#   required:     keys that must be present (drives E072)
+#   optional:     keys allowed but not required (joins `required` for the
+#                 recognized-set used by W042)
+#   list_args:    keys whose value must be a list   (drives E073)
+#   string_args:  keys whose value must be a string (drives E073)
+#   number_args:  keys whose value must be a number, not bool (drives E073)
+#   dict_args:    keys whose value must be a dict   (drives E073)
+#   path_args:    keys whose value is a JSONPath string (drives E075)
+#   recurse:      single key holding a sub-predicate to recurse into
+#   recurse_list: single key holding a list of sub-predicates to recurse into
+_PREDICATE_OP_SPEC: dict[str, dict] = {
+    "equals": {"required": ["arg"]},
+    "in": {"required": ["args"], "list_args": ["args"]},
+    "unordered_set_eq": {"required": ["expected"], "list_args": ["expected"]},
+    "and": {"required": ["args"], "list_args": ["args"], "recurse_list": "args"},
+    "or": {"required": ["args"], "list_args": ["args"], "recurse_list": "args"},
+    "not": {"required": ["arg"], "recurse": "arg"},
+    "any": {"required": ["path", "body"], "path_args": ["path"], "recurse": "body"},
+    "every": {"required": ["path", "body"], "path_args": ["path"], "recurse": "body"},
+    "none": {"required": ["path", "body"], "path_args": ["path"], "recurse": "body"},
+    "field": {"required": ["name", "body"], "string_args": ["name"], "recurse": "body"},
+    "jaccard_ge": {
+        "required": ["possible_sets", "threshold"],
+        "list_args": ["possible_sets"],
+        "number_args": ["threshold"],
+    },
+    "f1": {"required": ["expected"], "list_args": ["expected"]},
+    "jaccard": {"required": ["possible_sets"], "list_args": ["possible_sets"]},
+    "weighted_label": {
+        "required": ["table"],
+        "dict_args": ["table"],
+        "optional": ["default"],
+    },
+}
+
+
+def _recognized_keys(spec: dict) -> set[str]:
+    return {"op"} | set(spec.get("required", [])) | set(spec.get("optional", []))
+
+
+_PREDICATE_MAX_DEPTH = 8
+_COMPOSITE_MAX_DEPTH = 8
+
+
+def _validate_taxonomy_grader_config(
+    grader_type: str, config: dict, grader_path: str
+) -> list[LintIssue]:
+    """Single dispatcher for the predicate-leaf / composite taxonomy."""
+    location = f"{grader_path}.config"
+    if grader_type == "predicate_leaf":
+        return _validate_predicate_leaf_inline(config, location, allow_additive=False)
+    if grader_type == "all_of":
+        return _validate_all_of_config(config, location)
+    if grader_type == "list_match":
+        return _validate_list_match_config(config, location)
+    if grader_type == "dict_match":
+        return _validate_dict_match_config(config, location)
+    return []
+
+
+def _validate_predicate_leaf_inline(
+    leaf, location: str, *, allow_additive: bool
+) -> list[LintIssue]:
+    """Validating a predicate leaf single or as composite"""
+    if not isinstance(leaf, dict):
+        return [
+            LintIssue(
+                "error",
+                "E070",
+                f"predicate-leaf must be an object, got {type(leaf).__name__}",
+                location,
+            )
+        ]
+
+    issues: list[LintIssue] = []
+
+    if "predicate" in leaf:
+        issues.extend(_validate_predicate(leaf["predicate"], f"{location}.predicate"))
+    else:
+        issues.append(
+            LintIssue(
+                "error",
+                "E070",
+                "predicate-leaf missing required key 'predicate'",
+                location,
+            )
+        )
+
+    role = leaf.get("role")
+    if role is None:
+        issues.append(
+            LintIssue(
+                "error",
+                "E074",
+                "predicate-leaf missing required key 'role'",
+                f"{location}.role",
+            )
+        )
+    elif role not in {"gate", "additive", "hard_fail"}:
+        issues.append(
+            LintIssue(
+                "error",
+                "E074",
+                f"role must be one of gate/additive/hard_fail, got {role!r}",
+                f"{location}.role",
+            )
+        )
+    elif role == "additive" and not allow_additive:
+        issues.append(
+            LintIssue(
+                "error",
+                "E076",
+                "role 'additive' is invalid here; valid only inside "
+                "list_match.ground_truth[*].fields.*, dict_match.ground_truth[*], "
+                "or as a direct child of all_of",
+                f"{location}.role",
+            )
+        )
+    elif role == "hard_fail" and not leaf.get("name"):
+        issues.append(
+            LintIssue(
+                "error",
+                "E090",
+                "role 'hard_fail' leafs must declare a 'name' for failure reports",
+                f"{location}.name",
+            )
+        )
+
+    if "threshold" in leaf:
+        predicate = leaf.get("predicate")
+        op = predicate.get("op") if isinstance(predicate, dict) else None
+        if op in BOOLEAN_OPS:
+            issues.append(
+                LintIssue(
+                    "warning",
+                    "W040",
+                    f"'threshold' is set on a boolean predicate (op={op!r}); it will be ignored",
+                    f"{location}.threshold",
+                )
+            )
+
+    return issues
+
+
+def _validate_composite_child(child, location: str, depth: int) -> list[LintIssue]:
+    """Dispatching one composite child. Can be bare predicate leaf or composite"""
+    if depth > _COMPOSITE_MAX_DEPTH:
+        return [
+            LintIssue(
+                "error",
+                "E089",
+                f"composite nesting exceeds depth {_COMPOSITE_MAX_DEPTH}",
+                location,
+            )
+        ]
+    if not isinstance(child, dict):
+        return [
+            LintIssue(
+                "error",
+                "E078",
+                f"composite child must be an object, got {type(child).__name__}",
+                location,
+            )
+        ]
+
+    if "predicate" in child and "type" not in child:
+        return _validate_predicate_leaf_inline(child, location, allow_additive=True)
+
+    if "type" not in child:
+        return [
+            LintIssue(
+                "error",
+                "E078",
+                "composite child must be a composite envelope ({type, config, ...}) "
+                "or a bare predicate-leaf ({predicate, role, ...})",
+                location,
+            )
+        ]
+
+    child_type = child["type"]
+    if child_type not in VALID_GRADER_TYPES:
+        return [
+            LintIssue(
+                "error",
+                "E032",
+                f"Invalid grader.type: {child_type!r}. Must be one of: {VALID_GRADER_TYPES}",
+                f"{location}.type",
+            )
+        ]
+    child_config = child.get("config")
+    if child_config is None:
+        return [
+            LintIssue(
+                "error",
+                "E033",
+                "Missing required field: grader.config",
+                f"{location}.config",
+            )
+        ]
+    if not isinstance(child_config, dict):
+        return [
+            LintIssue(
+                "error",
+                "E034",
+                f"grader.config must be object, got {type(child_config).__name__}",
+                f"{location}.config",
+            )
+        ]
+
+    inner_loc = f"{location}.config"
+    if child_type == "all_of":
+        return _validate_all_of_config(child_config, inner_loc, depth + 1)
+    if child_type == "list_match":
+        return _validate_list_match_config(child_config, inner_loc, depth + 1)
+    if child_type == "dict_match":
+        return _validate_dict_match_config(child_config, inner_loc, depth + 1)
+    if child_type == "predicate_leaf":
+        return _validate_predicate_leaf_inline(
+            child_config, inner_loc, allow_additive=True
+        )
+    return []
+
+
+def _validate_all_of_config(
+    config: dict, location: str, depth: int = 0
+) -> list[LintIssue]:
+    issues: list[LintIssue] = []
+
+    pass_rule = config.get("pass_rule", "all")
+    if pass_rule not in {"all", "min_passing", "score_threshold"}:
+        issues.append(
+            LintIssue(
+                "error",
+                "E079",
+                f"pass_rule must be one of all/min_passing/score_threshold, got {pass_rule!r}",
+                f"{location}.pass_rule",
+            )
+        )
+
+    children = config.get("children", [])
+    if not isinstance(children, list):
+        issues.append(
+            LintIssue(
+                "error",
+                "E078",
+                f"children must be a list, got {type(children).__name__}",
+                f"{location}.children",
+            )
+        )
+        return issues
+
+    n_scoring = sum(
+        1
+        for c in children
+        if not (isinstance(c, dict) and c.get("role") == "hard_fail")
+    )
+
+    if pass_rule == "min_passing":
+        n = config.get("min_passing_children")
+        if not isinstance(n, int) or isinstance(n, bool):
+            issues.append(
+                LintIssue(
+                    "error",
+                    "E079",
+                    "min_passing_children must be an int when pass_rule='min_passing'",
+                    f"{location}.min_passing_children",
+                )
+            )
+        elif n > n_scoring:
+            issues.append(
+                LintIssue(
+                    "error",
+                    "E085",
+                    f"min_passing_children={n} exceeds count of scoring children ({n_scoring})",
+                    f"{location}.min_passing_children",
+                )
+            )
+    elif pass_rule == "score_threshold":
+        thr = config.get("score_threshold")
+        if not isinstance(thr, (int, float)) or isinstance(thr, bool):
+            issues.append(
+                LintIssue(
+                    "error",
+                    "E079",
+                    "score_threshold must be a number when pass_rule='score_threshold'",
+                    f"{location}.score_threshold",
+                )
+            )
+
+    for i, child in enumerate(children):
+        issues.extend(
+            _validate_composite_child(child, f"{location}.children[{i}]", depth)
+        )
+
+    return issues
+
+
+def _validate_list_match_config(
+    config: dict, location: str, depth: int = 0
+) -> list[LintIssue]:
+    issues: list[LintIssue] = []
+
+    match_key = config.get("match_key")
+    k = config.get("k")
+    tuple_pass_min = config.get("tuple_pass_min", 0)
+    additive_score_min = config.get("additive_score_min", 0)
+    gt_entries = config.get("ground_truth", [])
+
+    if (
+        isinstance(k, int)
+        and not isinstance(k, bool)
+        and isinstance(tuple_pass_min, int)
+        and not isinstance(tuple_pass_min, bool)
+        and tuple_pass_min > k
+    ):
+        issues.append(
+            LintIssue(
+                "error",
+                "E084",
+                f"tuple_pass_min={tuple_pass_min} exceeds k={k}",
+                f"{location}.tuple_pass_min",
+            )
+        )
+
+    if not isinstance(gt_entries, list):
+        issues.append(
+            LintIssue(
+                "error",
+                "E088",
+                f"ground_truth must be a list, got {type(gt_entries).__name__}",
+                f"{location}.ground_truth",
+            )
+        )
+        return issues
+
+    n_additive_fields = 0
+    for i, gt in enumerate(gt_entries):
+        gt_loc = f"{location}.ground_truth[{i}]"
+        if not isinstance(gt, dict):
+            issues.append(
+                LintIssue(
+                    "error",
+                    "E088",
+                    f"ground_truth entry must be object, got {type(gt).__name__}",
+                    gt_loc,
+                )
+            )
+            continue
+        if isinstance(match_key, str) and match_key not in gt:
+            issues.append(
+                LintIssue(
+                    "error",
+                    "E086",
+                    f"ground_truth entry missing match_key {match_key!r}",
+                    gt_loc,
+                )
+            )
+        fields = gt.get("fields", {})
+        if not isinstance(fields, dict):
+            issues.append(
+                LintIssue(
+                    "error",
+                    "E088",
+                    f"ground_truth[{i}].fields must be object, got {type(fields).__name__}",
+                    f"{gt_loc}.fields",
+                )
+            )
+            continue
+        for fname, leaf in fields.items():
+            issues.extend(
+                _validate_predicate_leaf_inline(
+                    leaf, f"{gt_loc}.fields.{fname}", allow_additive=True
+                )
+            )
+            if isinstance(leaf, dict) and leaf.get("role") == "additive":
+                n_additive_fields += 1
+
+    if (
+        isinstance(additive_score_min, (int, float))
+        and not isinstance(additive_score_min, bool)
+        and additive_score_min > n_additive_fields
+    ):
+        issues.append(
+            LintIssue(
+                "warning",
+                "W043",
+                f"additive_score_min={additive_score_min} exceeds maximum possible "
+                f"additive contributions ({n_additive_fields})",
+                f"{location}.additive_score_min",
+            )
+        )
+
+    return issues
+
+
+def _validate_dict_match_config(
+    config: dict, location: str, depth: int = 0
+) -> list[LintIssue]:
+    issues: list[LintIssue] = []
+
+    gt = config.get("ground_truth")
+    if not isinstance(gt, dict):
+        issues.append(
+            LintIssue(
+                "error",
+                "E087",
+                f"ground_truth must be object, got {type(gt).__name__}",
+                f"{location}.ground_truth",
+            )
+        )
+        return issues
+
+    for key, entry in gt.items():
+        entry_loc = f"{location}.ground_truth.{key}"
+        if not isinstance(entry, dict):
+            issues.append(
+                LintIssue(
+                    "error",
+                    "E087",
+                    f"ground_truth.{key} must be object, got {type(entry).__name__}",
+                    entry_loc,
+                )
+            )
+            continue
+        if "predicate" in entry:
+            issues.extend(
+                _validate_predicate_leaf_inline(entry, entry_loc, allow_additive=True)
+            )
+            continue
+        if "fields" in entry:
+            fields = entry["fields"]
+            if not isinstance(fields, dict):
+                issues.append(
+                    LintIssue(
+                        "error",
+                        "E087",
+                        f"ground_truth.{key}.fields must be object, got {type(fields).__name__}",
+                        f"{entry_loc}.fields",
+                    )
+                )
+                continue
+            for fname, leaf in fields.items():
+                issues.extend(
+                    _validate_predicate_leaf_inline(
+                        leaf, f"{entry_loc}.fields.{fname}", allow_additive=True
+                    )
+                )
+            continue
+        issues.append(
+            LintIssue(
+                "error",
+                "E087",
+                f"ground_truth.{key} must have 'predicate' (scalar form) or 'fields' (object form)",
+                entry_loc,
+            )
+        )
+
+    return issues
+
+
+def _validate_predicate(pred, location: str, depth: int = 0) -> list[LintIssue]:
+    """Recursively validate a predicate AST node."""
+    if depth > _PREDICATE_MAX_DEPTH:
+        return [
+            LintIssue(
+                "error",
+                "E077",
+                f"predicate nesting exceeds depth {_PREDICATE_MAX_DEPTH}",
+                location,
+            )
+        ]
+    if not isinstance(pred, dict):
+        return [
+            LintIssue(
+                "error",
+                "E070",
+                f"predicate must be an object, got {type(pred).__name__}",
+                location,
+            )
+        ]
+    if "op" not in pred:
+        return [LintIssue("error", "E070", "predicate must have an 'op' key", location)]
+    op = pred["op"]
+    if op not in _PREDICATE_OP_SPEC:
+        return [
+            LintIssue(
+                "error",
+                "E071",
+                f"Unknown predicate op: {op!r}. Known ops: {sorted(_PREDICATE_OP_SPEC)}",
+                location,
+            )
+        ]
+
+    spec = _PREDICATE_OP_SPEC[op]
+    issues: list[LintIssue] = []
+
+    # W042: unrecognized keys (typo + disallowed-metadata catcher)
+    recognized = _recognized_keys(spec)
+    for key in pred:
+        if key not in recognized:
+            issues.append(
+                LintIssue(
+                    "warning",
+                    "W042",
+                    f"Predicate op {op!r} does not recognize key {key!r}; it will be ignored",
+                    f"{location}.{key}",
+                )
+            )
+
+    # E072: required keys present
+    for key in spec.get("required", []):
+        if key not in pred:
+            issues.append(_missing_pred_arg(op, key, location))
+
+    # E073: per-arg type checks (only fire when key is present)
+    for key in spec.get("list_args", []):
+        if key in pred and not isinstance(pred[key], list):
+            issues.append(_wrong_type_issue(op, key, "list", pred[key], location))
+    for key in spec.get("string_args", []):
+        if key in pred and not isinstance(pred[key], str):
+            issues.append(_wrong_type_issue(op, key, "string", pred[key], location))
+    for key in spec.get("number_args", []):
+        if key in pred and (
+            isinstance(pred[key], bool) or not isinstance(pred[key], (int, float))
+        ):
+            issues.append(_wrong_type_issue(op, key, "number", pred[key], location))
+    for key in spec.get("dict_args", []):
+        if key in pred and not isinstance(pred[key], dict):
+            issues.append(_wrong_type_issue(op, key, "object", pred[key], location))
+
+    # E075: jsonpath syntax
+    for key in spec.get("path_args", []):
+        if key in pred:
+            issues.extend(_validate_jsonpath(pred[key], f"{location}.{key}"))
+
+    # Recurse into sub-predicates
+    rec_key = spec.get("recurse")
+    if rec_key and rec_key in pred:
+        issues.extend(
+            _validate_predicate(pred[rec_key], f"{location}.{rec_key}", depth + 1)
+        )
+    rec_list_key = spec.get("recurse_list")
+    if rec_list_key and isinstance(pred.get(rec_list_key), list):
+        for i, sub in enumerate(pred[rec_list_key]):
+            issues.extend(
+                _validate_predicate(sub, f"{location}.{rec_list_key}[{i}]", depth + 1)
+            )
+
+    return issues
+
+
+def _missing_pred_arg(op: str, key: str, location: str) -> LintIssue:
+    return LintIssue(
+        "error",
+        "E072",
+        f"Predicate op {op!r} requires arg {key!r}",
+        location,
+    )
+
+
+def _wrong_type_issue(
+    op: str, key: str, expected: str, value, location: str
+) -> LintIssue:
+    return LintIssue(
+        "error",
+        "E073",
+        f"Predicate op {op!r} arg {key!r} must be {expected}, got {type(value).__name__}",
+        f"{location}.{key}",
+    )
+
+
+def _validate_jsonpath(path, location: str) -> list[LintIssue]:
+    """Re-uses runtime resolver as syntax oracle."""
+    if not isinstance(path, str):
+        return [
+            LintIssue(
+                "error",
+                "E075",
+                f"jsonpath must be string, got {type(path).__name__}",
+                location,
+            )
+        ]
+    try:
+        resolve_jsonpath({}, path)
+    except ValueError as exc:
+        return [
+            LintIssue(
+                "error",
+                "E075",
+                f"invalid jsonpath {path!r}: {exc}",
+                location,
+            )
+        ]
+    return []
 
 
 def _validate_tolerances(config: dict, grader_path: str) -> list[LintIssue]:
