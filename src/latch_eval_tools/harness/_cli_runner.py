@@ -355,34 +355,31 @@ def _run_cli_agent(
                     process.stdin.close()
 
                 timed_out_attempt = False
-                submission_attempt = False
+                answer_submitted = False
                 try:
-                    if agent_type != "pi":
-                        process.wait(timeout=remaining_timeout)
-                    else:
-                        while process.poll() is None:
-                            now = time.time()
-                            remaining_timeout = deadline - now
-                            if remaining_timeout <= 0:
-                                raise subprocess.TimeoutExpired(
-                                    process.args, remaining_timeout
-                                )
+                    while process.poll() is None:
+                        now = time.time()
+                        remaining_timeout = deadline - now
+                        if remaining_timeout <= 0:
+                            raise subprocess.TimeoutExpired(
+                                process.args, remaining_timeout
+                            )
 
-                            try:
-                                if eval_answer_file.exists():
-                                    json.loads(eval_answer_file.read_text())
-                                    submission_attempt = True
-                                    process.terminate()
-                                    try:
-                                        process.wait(timeout=10)
-                                    except subprocess.TimeoutExpired:
-                                        process.kill()
-                                        process.wait()
-                                    break
-                            except (json.JSONDecodeError, OSError):
-                                pass
+                        try:
+                            if eval_answer_file.exists():
+                                json.loads(eval_answer_file.read_text())
+                                answer_submitted = True
+                                process.terminate()
+                                try:
+                                    process.wait(timeout=10)
+                                except subprocess.TimeoutExpired:
+                                    process.kill()
+                                    process.wait()
+                                break
+                        except (json.JSONDecodeError, OSError):
+                            pass
 
-                            time.sleep(min(1, remaining_timeout))
+                        time.sleep(min(1, remaining_timeout))
                 except subprocess.TimeoutExpired:
                     timed_out_attempt = True
                     process.kill()
@@ -391,9 +388,8 @@ def _run_cli_agent(
                 stdout_thread.join(timeout=5)
                 stderr_thread.join(timeout=5)
                 last_return_code = process.returncode
-                if submission_attempt:
-                    # todo: change
-                    log_file.write("\n\nDetected Pi eval_answer.json; stopping agent\n")
+                if answer_submitted:
+                    log_file.write("\n\nDetected eval_answer.json, stopping agent\n")
                     log_file.flush()
                     break
                 if timed_out_attempt:
