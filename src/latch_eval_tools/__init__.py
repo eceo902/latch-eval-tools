@@ -1,5 +1,4 @@
 from latch_eval_tools.types import Eval, EvalResult, TestCase, TestResult
-from latch_eval_tools.linter import lint_eval, lint_directory, LintResult
 from latch_eval_tools.harness import (
     EvalRunner,
     run_minisweagent_task,
@@ -26,6 +25,10 @@ from latch_eval_tools.graders import (
     SpatialAdjacencyGrader,
     MultipleChoiceGrader,
     RefusalVocabGrader,
+    PredicateLeafGrader,
+    AllOfGrader,
+    ListMatchGrader,
+    DictMatchGrader,
     GRADER_REGISTRY,
     get_grader,
 )
@@ -36,10 +39,6 @@ __all__ = [
     "EvalResult",
     "TestCase",  # Backward compatibility alias
     "TestResult",  # Backward compatibility alias
-    # Linter
-    "lint_eval",
-    "lint_directory",
-    "LintResult",
     # Harness
     "EvalRunner",
     "run_minisweagent_task",
@@ -65,6 +64,10 @@ __all__ = [
     "SpatialAdjacencyGrader",
     "MultipleChoiceGrader",
     "RefusalVocabGrader",
+    "PredicateLeafGrader",
+    "AllOfGrader",
+    "ListMatchGrader",
+    "DictMatchGrader",
     "GRADER_REGISTRY",
     "get_grader",
 ]
