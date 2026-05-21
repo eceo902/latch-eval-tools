@@ -154,8 +154,7 @@ def _apply_role(
     """Map (role, predicate verdict) -> (kind, passed, score).
 
     kind: 'scoring' (gate / additive) or 'hard_fail'. Unknown role falls
-    through to ('scoring', False, 0.0) -- the linter catches it at lint
-    time; this is belt-and-braces.
+    through to ('scoring', False, 0.0) as a defensive default.
     """
     if role == "hard_fail":
         triggered = float(raw) >= threshold if is_scalar else bool(raw)

@@ -13,7 +13,6 @@ pip install latch-eval-tools
 - `Eval` / `EvalResult` types
 - Built-in graders + `get_grader()`
 - `EvalRunner` harness to run an agent against one eval JSON
-- `eval-lint` CLI and Python linter APIs
 
 ## Quickstart
 
@@ -65,22 +64,6 @@ Built-in harness helpers:
 - `run_claudecode_task` (requires `ANTHROPIC_API_KEY` and `claude` CLI)
 - `run_openaicodex_task` (requires `OPENAI_API_KEY` or `CODEX_API_KEY` and `codex` CLI)
 - `run_plotsagent_task` (experimental latch-plots harness)
-
-### Linter
-
-Validate eval JSON files:
-
-```bash
-eval-lint evals/my_dataset/
-eval-lint evals/ --format json
-```
-
-```python
-from latch_eval_tools.linter import lint_eval, lint_directory
-
-result = lint_eval("evals/test.json")
-print(result.passed, result.issues)
-```
 
 ## Eval JSON shape
 
