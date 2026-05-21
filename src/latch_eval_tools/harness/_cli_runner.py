@@ -25,6 +25,7 @@ ANTHROPIC_ENV_KEYS = {"ANTHROPIC_API_KEY"}
 OPENAI_ENV_KEYS = {"OPENAI_API_KEY", "CODEX_API_KEY"}
 PI_ENV_KEYS = {
     "ANTHROPIC_API_KEY",
+    "FIREWORKS_API_KEY",
     "OPENAI_API_KEY",
     "GEMINI_API_KEY",
     "XAI_API_KEY",
@@ -193,7 +194,7 @@ def _run_cli_agent(
     agent_log_file = work_dir / "agent_output.log"
     if agent_log_file.exists():
         agent_log_file.unlink()
-
+    # todo(tim): clean up instructions based on early exit
     enhanced_prompt = f"{task_prompt}\n{load_data_instructions()}"
 
     env = os.environ.copy()
