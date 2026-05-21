@@ -34,12 +34,7 @@ TestResult = EvalResult
 
 
 class GraderSpec(BaseModel):
-    """A single grader entry: ``{"type": <str>, "config": <dict>}``.
-
-    Unknown top-level keys are tolerated to match the linter's ``W022``
-    "unknown grader field" warning (non-fatal); runtime grading should
-    not be stricter than static analysis.
-    """
+    """A single grader entry: ``{"type": <str>, "config": <dict>}``."""
 
     model_config = ConfigDict(strict=True, extra="ignore")
 

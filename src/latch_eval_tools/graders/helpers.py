@@ -12,8 +12,7 @@ def grade_multiple_graders_single_answer(
     ``grader_specs`` is a list of ``{"type": <str>, "config": <dict>}`` entries
     (the same shape used by the top-level ``graders`` field in an eval JSON).
     Each sub-grader receives the full ``agent_answer`` and its own sub-config;
-    sub-graders are expected to own disjoint answer fields (enforced at lint
-    time via E051).
+    sub-graders are expected to own disjoint answer fields.
 
     Returns a list aligned 1:1 with ``grader_specs``. A valid spec yields a
     :class:`GraderResult`; any malformed spec (non-dict, missing ``type``,
