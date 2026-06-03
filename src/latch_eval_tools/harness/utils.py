@@ -9,7 +9,7 @@ from jinja2 import DebugUndefined, Environment
 from latch.ldata.path import LPath
 import subprocess
 
-DEFAULT_DOCKER_IMAGE = "public.ecr.aws/p5z7v3z8/benchmark_agent:latest"
+DEFAULT_DOCKER_IMAGE = "ghcr.io/eceo902/benchmark_agent:gemini-v1"
 GIBIBYTE = 1024**3
 MEMORY_HEADROOM_BYTES = 2 * GIBIBYTE
 MIN_MEMORY_LIMIT_BYTES = 128 * 1024**2

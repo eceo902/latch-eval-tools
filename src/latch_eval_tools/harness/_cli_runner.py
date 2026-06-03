@@ -23,6 +23,8 @@ from latch_eval_tools.harness.utils import (
 EVAL_TIMEOUT = 600
 ANTHROPIC_ENV_KEYS = {"ANTHROPIC_API_KEY"}
 OPENAI_ENV_KEYS = {"OPENAI_API_KEY", "CODEX_API_KEY"}
+GEMINI_ENV_KEYS = {"GEMINI_API_KEY", "GOOGLE_API_KEY"}
+XAI_ENV_KEYS = {"GROK_API_KEY", "XAI_API_KEY"}
 PI_ENV_KEYS = {
     "ANTHROPIC_API_KEY",
     "FIREWORKS_API_KEY",
@@ -36,11 +38,15 @@ MAX_OOM_RESTARTS = 10
 AGENT_STATE_DIRS = {
     "claudecode": ".claude",
     "openaicodex": ".codex",
+    "geminicli": ".gemini",
+    "grokcli": ".grok",
     "pi": ".pi",
 }
 AGENT_IDENTIFIER_KEYS = {
     "claudecode": "session_id",
     "openaicodex": "thread_id",
+    "geminicli": "session_id",
+    "grokcli": "session_id",
     "pi": "id",
 }
 PI_IGNORED_EVENT_TYPES = {"message_update", "tool_execution_update"}
@@ -100,6 +106,31 @@ def _build_agent_command(
                 'model_reasoning_effort="xhigh"',
             ]
         )
+    elif agent_type == "geminicli":
+        agent_cmd = list(cli_command)
+        if resume_identifier is not None:
+            agent_cmd.extend(["--resume", resume_identifier])
+        agent_cmd.extend(
+            [
+                "--prompt",
+                "",
+                "--skip-trust",
+                "--approval-mode=yolo",
+                "--output-format",
+                "stream-json",
+            ]
+        )
+    elif agent_type == "grokcli":
+        agent_cmd = list(cli_command)
+        if resume_identifier is not None:
+            agent_cmd.extend(["--session", resume_identifier])
+        agent_cmd.extend(
+            [
+                "--no-sandbox",
+                "--format",
+                "json",
+            ]
+        )
     elif agent_type == "pi":
         agent_cmd = list(cli_command)
         agent_cmd.extend(["--mode", "json", "--print"])
@@ -114,7 +145,12 @@ def _build_agent_command(
         agent_cmd.extend(["--model", mapped_model])
     elif model_name:
         agent_cmd.extend(["--model", model_name])
-    if agent_type != "pi" and resume_identifier is not None:
+    # codex exec resume takes the session id as a trailing positional:
+    #   codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]
+    # Gemini and Grok pass it via flag only, so skip the trailing append.
+    if resume_identifier is not None and agent_type not in {"geminicli", "grokcli"}:
+        agent_cmd.append(resume_identifier)
+    elif agent_type != "pi" and resume_identifier is not None:
         agent_cmd.append(resume_identifier)
     return agent_cmd
 
@@ -214,6 +250,10 @@ def _run_cli_agent(
         ENV_KEYS = ANTHROPIC_ENV_KEYS
     elif agent_type == "openaicodex":
         ENV_KEYS = OPENAI_ENV_KEYS
+    elif agent_type == "geminicli":
+        ENV_KEYS = GEMINI_ENV_KEYS
+    elif agent_type == "grokcli":
+        ENV_KEYS = XAI_ENV_KEYS
     elif agent_type == "pi":
         ENV_KEYS = PI_ENV_KEYS
     else:
@@ -289,6 +329,9 @@ def _run_cli_agent(
                     claude_code_extra_args=claude_code_extra_args,
                     resume_identifier=resume_identifier,
                 )
+                # grok-dev takes the prompt as a CLI argument rather than via stdin.
+                if agent_type == "grokcli":
+                    agent_cmd.extend(["-p", prompt_text])
 
                 process = subprocess.Popen(
                     ["docker", "exec", "-i", container_name, *agent_cmd],
@@ -352,7 +395,8 @@ def _run_cli_agent(
                 stderr_thread.start()
 
                 if process.stdin is not None:
-                    process.stdin.write(prompt_text)
+                    if agent_type != "grokcli":
+                        process.stdin.write(prompt_text)
                     process.stdin.close()
 
                 timed_out_attempt = False
@@ -598,6 +642,32 @@ def _extract_metadata(
             metadata["n_turns"] = n_turns
         if total_usage["input_tokens"] > 0 or total_usage["output_tokens"] > 0:
             metadata["usage"] = total_usage
+    elif agent_type == "geminicli":
+        session_id = None
+        gemini_result = None
+        for event in trajectory:
+            event_type = event.get("type", "")
+            if event_type == "init" and session_id is None:
+                session_id = event.get("session_id")
+            elif event_type == "result":
+                gemini_result = event
+        if session_id:
+            metadata["session_id"] = session_id
+        if gemini_result:
+            stats = gemini_result.get("stats")
+            if stats:
+                metadata["stats"] = stats
+    elif agent_type == "grokcli":
+        # grok --format json emits a single JSON object (possibly multi-line),
+        # which the line-by-line parser may capture as one entry or none.
+        grok_result = trajectory[-1] if trajectory else None
+        if isinstance(grok_result, dict):
+            session_id = grok_result.get("session_id") or grok_result.get("id")
+            if session_id:
+                metadata["session_id"] = session_id
+            usage = grok_result.get("usage")
+            if usage:
+                metadata["usage"] = usage
     elif agent_type == "pi":
         session_id = None
         n_turns = 0

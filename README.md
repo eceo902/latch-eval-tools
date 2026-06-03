@@ -73,7 +73,27 @@ Built-in harness helpers:
 - `run_minisweagent_task`
 - `run_claudecode_task` (requires `ANTHROPIC_API_KEY` and `claude` CLI)
 - `run_openaicodex_task` (requires `OPENAI_API_KEY` or `CODEX_API_KEY` and `codex` CLI)
+- `run_geminicli_task` (requires `GEMINI_API_KEY` or `GOOGLE_API_KEY` and `gemini` CLI)
+- `run_grokcli_task` (requires `GROK_API_KEY` or `XAI_API_KEY` and `grok` CLI from `grok-dev` npm package)
 - `run_plotsagent_task` (experimental latch-plots harness)
+
+The default Docker image includes the Gemini and Grok CLIs. While testing local agent-environment changes, build `agent_env` as `benchmark_agent:local` with `--platform linux/amd64` and pass `docker_image="benchmark_agent:local"`.
+
+### Linter
+
+Validate eval JSON files:
+
+```bash
+eval-lint evals/my_dataset/
+eval-lint evals/ --format json
+```
+
+```python
+from latch_eval_tools.linter import lint_eval, lint_directory
+
+result = lint_eval("evals/test.json")
+print(result.passed, result.issues)
+```
 
 ## Eval JSON shape
 

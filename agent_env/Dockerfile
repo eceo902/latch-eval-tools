@@ -25,10 +25,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libhdf5-dev libgeos-dev libproj-dev libgdal-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# Node.js 20 (required by @google/gemini-cli; fine for @openai/codex which needs >=16)
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
 # uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 ENV IS_SANDBOX=1
+ENV PATH="/root/.local/bin:$PATH"
 
 # Node and Codex/Pi CLIs
 COPY --from=node:22-bookworm-slim /usr/local/bin/node /usr/local/bin/node
@@ -38,9 +44,19 @@ RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && 
     npm config set prefix /root/.local && \
     npm install -g @openai/codex@0.125.0 @earendil-works/pi-coding-agent@0.75.4
 
+# Gemini CLI
+RUN npm install -g @google/gemini-cli@0.41.2 && \
+    gemini --version
+
+# Bun (required by grok-dev — its `grok` binary uses /usr/bin/env bun)
+RUN npm install -g bun@1.3.13
+
+# Grok CLI (xAI, third-party `grok-dev` package — installs `grok` binary)
+RUN npm install -g grok-dev@1.1.6 && \
+    grok --version
+
 # Claude Code
 RUN curl -fsSL https://claude.ai/install.sh | bash
-ENV PATH="/root/.local/bin:$PATH"
 RUN claude install 2.1.119
 
 # R (from CRAN for a recent release on Bookworm)
@@ -54,7 +70,7 @@ RUN curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x95C0FAF3
 
     
 # Python environment — agent-env deps
-# Build context: latch-eval-tools/env/  (docker build -f Dockerfile .)
+# Build context: latch-eval-tools/agent_env/
 COPY . /root/
 
 WORKDIR /root
