@@ -13,7 +13,6 @@ pip install latch-eval-tools
 - `Eval` / `EvalResult` types
 - Built-in graders + `get_grader()`
 - `EvalRunner` harness to run an agent against one eval JSON
-- `eval-lint` CLI and Python linter APIs
 
 ## Quickstart
 
@@ -43,7 +42,7 @@ If your agent writes `eval_answer.json` in `work_dir`, the runner will load it a
 
 Available grader types:
 
-`numeric_tolerance`, `jaccard_label_set`, `distribution_comparison`, `marker_gene_precision_recall`, `marker_gene_separation`, `spatial_adjacency`, `multiple_choice`
+`numeric_tolerance`, `jaccard_label_set`, `distribution_comparison`, `marker_gene_precision_recall`, `marker_gene_separation`, `spatial_adjacency`, `multiple_choice`, `refusal_vocab`
 
 ```python
 from latch_eval_tools.graders import get_grader
@@ -58,6 +57,16 @@ result = grader.evaluate_answer(
 )
 print(result.passed, result.reasoning)
 ```
+
+`refusal_vocab` grades structured refusal decisions against fixed tokens. The
+agent answer should be JSON, for example:
+
+```json
+{"decision": "REFUSE", "rationale": ["ENHANCED_TRANSMISSIBILITY"]}
+```
+
+See `examples/refusal_vocab_example.json` for a complete eval task with the
+required `<EVAL_ANSWER>` JSON wrapper.
 
 Built-in harness helpers:
 

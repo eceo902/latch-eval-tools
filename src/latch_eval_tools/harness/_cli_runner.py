@@ -25,6 +25,13 @@ ANTHROPIC_ENV_KEYS = {"ANTHROPIC_API_KEY"}
 OPENAI_ENV_KEYS = {"OPENAI_API_KEY", "CODEX_API_KEY"}
 GEMINI_ENV_KEYS = {"GEMINI_API_KEY", "GOOGLE_API_KEY"}
 XAI_ENV_KEYS = {"GROK_API_KEY", "XAI_API_KEY"}
+PI_ENV_KEYS = {
+    "ANTHROPIC_API_KEY",
+    "FIREWORKS_API_KEY",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+    "XAI_API_KEY",
+}
 
 OOM_EXIT_CODE = 137
 MAX_OOM_RESTARTS = 10
@@ -33,13 +40,16 @@ AGENT_STATE_DIRS = {
     "openaicodex": ".codex",
     "geminicli": ".gemini",
     "grokcli": ".grok",
+    "pi": ".pi",
 }
 AGENT_IDENTIFIER_KEYS = {
     "claudecode": "session_id",
     "openaicodex": "thread_id",
     "geminicli": "session_id",
     "grokcli": "session_id",
+    "pi": "id",
 }
+PI_IGNORED_EVENT_TYPES = {"message_update", "tool_execution_update"}
 
 
 def teardown_container(container_name: str) -> None:
@@ -121,6 +131,12 @@ def _build_agent_command(
                 "json",
             ]
         )
+    elif agent_type == "pi":
+        agent_cmd = list(cli_command)
+        agent_cmd.extend(["--mode", "json", "--print"])
+        if resume_identifier is not None:
+            agent_cmd.extend(["--session", resume_identifier])
+        agent_cmd.extend(["--thinking", "xhigh"])
     else:
         raise ValueError(f"Unknown agent type: {agent_type}")
 
@@ -133,6 +149,8 @@ def _build_agent_command(
     #   codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]
     # Gemini and Grok pass it via flag only, so skip the trailing append.
     if resume_identifier is not None and agent_type not in {"geminicli", "grokcli"}:
+        agent_cmd.append(resume_identifier)
+    elif agent_type != "pi" and resume_identifier is not None:
         agent_cmd.append(resume_identifier)
     return agent_cmd
 
@@ -212,7 +230,7 @@ def _run_cli_agent(
     agent_log_file = work_dir / "agent_output.log"
     if agent_log_file.exists():
         agent_log_file.unlink()
-
+    # todo(tim): clean up instructions based on early exit
     enhanced_prompt = f"{task_prompt}\n{load_data_instructions()}"
 
     env = os.environ.copy()
@@ -236,12 +254,23 @@ def _run_cli_agent(
         ENV_KEYS = GEMINI_ENV_KEYS
     elif agent_type == "grokcli":
         ENV_KEYS = XAI_ENV_KEYS
+    elif agent_type == "pi":
+        ENV_KEYS = PI_ENV_KEYS
     else:
         raise ValueError(f"Unknown agent type: {agent_type}")
     for key in ENV_KEYS:
         value = env.get(key)
         if value:
             env_flags.extend(["-e", f"{key}={value}"])
+    if agent_type == "pi":
+        env_flags.extend(
+            [
+                "-e",
+                "PI_SKIP_VERSION_CHECK=1",
+                "-e",
+                "PI_TELEMETRY=0",
+            ]
+        )
     if memory_limit_bytes is None:
         memory_limit_bytes = get_memory_limit_bytes()
     container_name = f"eval-{agent_type}-{uuid.uuid4().hex[:8]}"
@@ -253,6 +282,7 @@ def _run_cli_agent(
     trajectory = []
     trajectory_file = work_dir / "trajectory.json"
     trajectory_file.write_text(json.dumps(trajectory, indent=2))
+    eval_answer_file = agent_dir / "eval_answer.json"
     oom_detected = False
     oom_restarts = 0
 
@@ -322,14 +352,20 @@ def _run_cli_agent(
                         return
                     try:
                         for line in process.stdout:
-                            log_file.write(line)
-                            log_file.flush()
+                            if agent_type != "pi":
+                                log_file.write(line)
+                                log_file.flush()
 
                             stripped = line.strip()
                             if not stripped:
                                 continue
                             try:
                                 event = json.loads(stripped)
+                                if (
+                                    agent_type == "pi"
+                                    and event["type"] in PI_IGNORED_EVENT_TYPES
+                                ):
+                                    continue
                                 with trajectory_lock:
                                     trajectory.append(event)
                                 persist_trajectory()
@@ -364,21 +400,48 @@ def _run_cli_agent(
                     process.stdin.close()
 
                 timed_out_attempt = False
+                answer_submitted = False
                 try:
-                    process.wait(timeout=remaining_timeout)
+                    while process.poll() is None:
+                        now = time.time()
+                        remaining_timeout = deadline - now
+                        if remaining_timeout <= 0:
+                            raise subprocess.TimeoutExpired(
+                                process.args, remaining_timeout
+                            )
+
+                        try:
+                            if eval_answer_file.exists():
+                                json.loads(eval_answer_file.read_text())
+                                answer_submitted = True
+                                process.terminate()
+                                try:
+                                    process.wait(timeout=10)
+                                except subprocess.TimeoutExpired:
+                                    process.kill()
+                                    process.wait()
+                                break
+                        except (json.JSONDecodeError, OSError):
+                            pass
+
+                        time.sleep(min(1, remaining_timeout))
                 except subprocess.TimeoutExpired:
                     timed_out_attempt = True
                     process.kill()
                     process.wait()
-                    log_file.write(
-                        f"\n\nAgent timed out after {eval_timeout} seconds\n"
-                    )
-                    log_file.flush()
 
                 stdout_thread.join(timeout=5)
                 stderr_thread.join(timeout=5)
                 last_return_code = process.returncode
+                if answer_submitted:
+                    log_file.write("\n\nDetected eval_answer.json, stopping agent\n")
+                    log_file.flush()
+                    break
                 if timed_out_attempt:
+                    log_file.write(
+                        f"\n\nAgent timed out after {eval_timeout} seconds\n"
+                    )
+                    log_file.flush()
                     timed_out = True
                     break
 
@@ -605,6 +668,41 @@ def _extract_metadata(
             usage = grok_result.get("usage")
             if usage:
                 metadata["usage"] = usage
+    elif agent_type == "pi":
+        session_id = None
+        n_turns = 0
+        total_cost = 0
+        total_usage = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+        }
+
+        for event in trajectory:
+            if event.get("type") == "session":
+                session_id = event.get("id")
+            elif event.get("type") == "turn_end":
+                n_turns += 1
+            elif event.get("type") == "message_end":
+                message = event.get("message")
+                if not isinstance(message, dict) or message.get("role") != "assistant":
+                    continue
+                usage = message["usage"]
+                total_usage["input_tokens"] += usage["input"]
+                total_usage["output_tokens"] += usage["output"]
+                total_usage["cache_read_tokens"] += usage["cacheRead"]
+                total_usage["cache_write_tokens"] += usage["cacheWrite"]
+                total_cost += usage["cost"]["total"]
+
+        if session_id:
+            metadata["session_id"] = session_id
+        if n_turns > 0:
+            metadata["n_turns"] = n_turns
+        if any(total_usage.values()):
+            metadata["usage"] = total_usage
+        if total_cost > 0:
+            metadata["total_cost"] = total_cost
 
     metadata["timed_out"] = timed_out
     metadata["eval_timeout_seconds"] = eval_timeout
